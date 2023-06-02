@@ -36,7 +36,7 @@ async fn main() {
 
     let health_route = warp::path!("health").and_then(health_handler);
 
-    let media = warp::path(env!("API_PATH"));
+    let media = warp::path("violin");
     let media_routes = media
         .and(warp::get())
         .and(warp::path::param())
