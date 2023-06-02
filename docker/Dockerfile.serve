@@ -1,0 +1,8 @@
+FROM ubuntu:focal
+
+COPY target/debug/media-server /server/media-server
+WORKDIR /server
+
+ENV RUST_LOG=warp
+
+ENTRYPOINT [ "./media-server" ]
