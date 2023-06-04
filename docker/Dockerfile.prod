@@ -4,7 +4,6 @@ COPY . /build
 WORKDIR /build
 ENV PATH="/root/.cargo/bin:${PATH}"
 ARG DEBIAN_FRONTEND=noninteractive
-ENV API_PATH="violin"
 
 RUN apt-get -y update && apt-get -y install curl build-essential libssl-dev pkg-config musl-tools && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
