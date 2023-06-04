@@ -22,7 +22,7 @@ jobs:
         - name: Checkout
           uses: actions/checkout@v2
           with:
-           path: main
+           path: violin
  
         - name: Docker Login
           run: | 
