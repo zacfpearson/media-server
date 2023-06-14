@@ -2,19 +2,21 @@
 use pretty_env_logger;
 use std::env;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
+use tokio_util::{io::ReaderStream, compat::FuturesAsyncReadCompatExt};
 
 type Result<T> = std::result::Result<T, Rejection>;
 use mongodb::{gridfs::GridFsBucket, Client};
+use hyper::{Body,Response};
 
 async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl Reply> {
-    let mut buf = Vec::new();
-    
-    bucket
-        .download_to_futures_0_3_writer_by_name(filename, &mut buf, None)
+    let download_stream = bucket
+        .open_download_stream_by_name(filename, None)
         .await
         .expect("should be able to download data to bucket");
 
-    Ok(buf)
+    let stream = ReaderStream::new(download_stream.compat());
+    let body = Body::wrap_stream(stream);
+    Ok(Response::new(body))
 }
 
 pub async fn health_handler() -> Result<impl Reply> {
