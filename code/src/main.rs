@@ -2,21 +2,45 @@
 use pretty_env_logger;
 use std::env;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
-use tokio_util::{io::ReaderStream, compat::FuturesAsyncReadCompatExt};
+use bytes::BufMut;
 
 type Result<T> = std::result::Result<T, Rejection>;
 use mongodb::{gridfs::GridFsBucket, Client};
 use hyper::{Body,Response};
+use futures::AsyncReadExt;
 
 async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl Reply> {
-    let download_stream = bucket
+    //channel to pipe output from async reader
+    let (sender, body) = Body::channel();
+
+    let mut download_stream = bucket
         .open_download_stream_by_name(filename, None)
         .await
         .expect("should be able to download data to bucket");
 
-    let stream = ReaderStream::new(download_stream.compat());
-    let body = Body::wrap_stream(stream);
-    Ok(Response::new(body))
+
+    tokio::spawn(async move {
+        let mut sender = sender;
+
+        loop {
+            let mut buf = [0; 4096]; 
+            let byte_count = download_stream.read(&mut buf).await.expect("should get bytes");
+            if byte_count == 0 {
+                break;
+            }
+
+            //copy data out of mut ref. 
+            //TODO: see if there is a better way.
+            let mut buf2 = vec![];
+            buf2.put(&buf[..byte_count]);
+
+            sender.send_data(buf2.into()).await.expect("should be able to send");
+        }
+    });
+
+    let resp = Response::new(body);
+    
+    Ok(resp)
 }
 
 pub async fn health_handler() -> Result<impl Reply> {
