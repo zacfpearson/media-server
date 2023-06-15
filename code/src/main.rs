@@ -23,7 +23,7 @@ async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl
         let mut sender = sender;
 
         loop {
-            let mut buf = [0; 4096]; 
+            let mut buf = [0; 1024000]; 
             let byte_count = download_stream.read(&mut buf).await.expect("should get bytes");
             if byte_count == 0 {
                 break;
