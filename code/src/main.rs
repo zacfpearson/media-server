@@ -1,49 +1,58 @@
 #![deny(warnings)]
 use pretty_env_logger;
 use std::env;
-use warp::{http::StatusCode, Filter, Rejection, Reply};
-use bytes::BufMut;
-
-type Result<T> = std::result::Result<T, Rejection>;
-use mongodb::{gridfs::GridFsBucket, Client};
+use warp::{http::{StatusCode}, Filter, Rejection, Reply, reject};
+use mongodb::{bson::doc, gridfs::GridFsBucket, gridfs::FilesCollectionDocument, Client};
 use hyper::{Body,Response};
-use futures::AsyncReadExt;
+use futures::TryStreamExt;
+use tokio_util::io::ReaderStream;
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl Reply> {
-    //channel to pipe output from async reader
-    let (sender, body) = Body::channel();
+use headers::{
+    ContentLength, ContentType, HeaderMapExt
+};
 
-    let mut download_stream = bucket
-        .open_download_stream_by_name(filename, None)
-        .await
-        .expect("should be able to download data to bucket");
+use mime_guess;
 
+async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl Reply, Rejection> {
+    let filter = doc!{"filename": filename.clone()};
+    match bucket.find(filter, None).await {
+        Ok(cursor) => {
+            let file_collections: Result<Vec<FilesCollectionDocument>,_> = cursor.try_collect().await;
+            match file_collections {
+                Ok(metas) => {
+                    let _chunk_size = metas[0].chunk_size_bytes;
+                    let length = metas[0].length;
 
-    tokio::spawn(async move {
-        let mut sender = sender;
+                    let download_stream = bucket
+                        .open_download_stream_by_name(filename.clone(), None)
+                        .await
+                        .expect("should be able to download data to bucket");
 
-        loop {
-            let mut buf = [0; 1024000]; 
-            let byte_count = download_stream.read(&mut buf).await.expect("should get bytes");
-            if byte_count == 0 {
-                break;
+                    let stream = ReaderStream::new(download_stream.compat());
+
+                    let body = Body::wrap_stream(stream);
+
+                    let mut resp = Response::new(body);
+                    *resp.status_mut() = StatusCode::OK;
+                    resp.headers_mut().typed_insert(ContentLength(length));
+
+                    let mime = mime_guess::from_path(filename.clone()).first_or_octet_stream();
+                    resp.headers_mut().typed_insert(ContentType::from(mime));
+                    
+                    Ok(resp)
+                },
+                Err(_) => return Err(reject::not_found())
             }
-
-            //copy data out of mut ref. 
-            //TODO: see if there is a better way.
-            let mut buf2 = vec![];
-            buf2.put(&buf[..byte_count]);
-
-            sender.send_data(buf2.into()).await.expect("should be able to send");
+        },
+        Err(_) => {
+            println!("no file");
+            return Err(reject::not_found())
         }
-    });
-
-    let resp = Response::new(body);
-    
-    Ok(resp)
+    }
 }
 
-pub async fn health_handler() -> Result<impl Reply> {
+pub async fn health_handler() -> Result<impl Reply, Rejection> {
     Ok(StatusCode::OK)
 }
 
