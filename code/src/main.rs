@@ -9,7 +9,7 @@ use tokio_util::io::ReaderStream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 use headers::{
-    ContentLength, ContentType, HeaderMapExt, AcceptRanges
+    ContentLength, ContentType, HeaderMapExt
 };
 
 use mime_guess;
