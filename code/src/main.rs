@@ -9,7 +9,7 @@ use tokio_util::io::ReaderStream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 use headers::{
-    ContentLength, ContentType, HeaderMapExt
+    ContentLength, ContentType, HeaderMapExt, AcceptRanges
 };
 
 use mime_guess;
@@ -39,6 +39,7 @@ async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl
 
                     let mime = mime_guess::from_path(filename.clone()).first_or_octet_stream();
                     resp.headers_mut().typed_insert(ContentType::from(mime));
+                    resp.headers_mut().typed_insert(AcceptRanges::bytes());
                     
                     Ok(resp)
                 },
