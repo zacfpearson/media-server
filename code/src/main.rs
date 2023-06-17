@@ -194,7 +194,7 @@ impl Conditionals {
 
 struct BadRange;
 
-fn bytes_range(range: Option<Range>, max_len: u64) -> Result<(u64, u64), BadRange> {
+fn bytes_range(range: Option<Range>, max_len: u64, chunk_size_bytes: u64) -> Result<(u64, u64), BadRange> {
     use std::ops::Bound;
 
     let range = if let Some(range) = range {
@@ -207,14 +207,31 @@ fn bytes_range(range: Option<Range>, max_len: u64) -> Result<(u64, u64), BadRang
         .iter()
         .map(|(start, end)| {
             let start = match start {
-                Bound::Unbounded => 0,
-                Bound::Included(s) => s,
-                Bound::Excluded(s) => s + 1,
+                Bound::Unbounded => {
+                    // println!("start unbound");
+                    0
+                },
+                Bound::Included(s) => {
+                    // println!("start included");
+                    s
+                },
+                Bound::Excluded(s) => {
+                    // println!("start excluded");
+                    s + 1
+                },
             };
 
             let end = match end {
-                Bound::Unbounded => max_len,
+                Bound::Unbounded => {
+                    // println!("end unbound");
+                    if start + chunk_size_bytes> max_len {
+                        max_len
+                    } else {
+                        start + chunk_size_bytes
+                    }
+                },
                 Bound::Included(s) => {
+                    // println!("end included");
                     // For the special case where s == the file size
                     if s == max_len {
                         s
@@ -222,7 +239,10 @@ fn bytes_range(range: Option<Range>, max_len: u64) -> Result<(u64, u64), BadRang
                         s + 1
                     }
                 }
-                Bound::Excluded(s) => s,
+                Bound::Excluded(s) => {
+                    // println!("end excluded");
+                    s
+                },
             };
 
             if start < end && end <= max_len {
@@ -236,62 +256,67 @@ fn bytes_range(range: Option<Range>, max_len: u64) -> Result<(u64, u64), BadRang
     ret
 }
 
-fn file_stream(
-    mut file: Compat<GridFsDownloadStream>,
-    buf_size: usize,
-    (start, end): (u64, u64),
-) -> impl Stream<Item = Result<Bytes, io::Error>> + Send {
-   // use std::io::SeekFrom;
+// fn file_stream(
+//     mut file: Compat<GridFsDownloadStream>,
+//     buf_size: usize,
+//     (start, end): (u64, u64),
+// ) -> impl Stream<Item = Result<Bytes, io::Error>> + Send {
+//    // use std::io::SeekFrom;
 
-    let seek = async move {
-        if start != 0 {
-            // const start: usize = start;
-            let mut buffer = Vec::with_capacity(start as usize);
-            file.read_exact(&mut buffer).await?;
-            //file.seek(SeekFrom::Start(start)).await?;
-        }
-        Ok(file)
-    };
+//     let seek = async move {
+//         if start != 0 {
+//             // const start: usize = start;
+//             let mut buffer = Vec::with_capacity(start as usize);
+//             file.read_exact(&mut buffer).await?;
+//             //file.seek(SeekFrom::Start(start)).await?;
+//         }
+//         Ok(file)
+//     };
 
-    seek.into_stream()
-        .map(move |result| {
-            let mut buf = BytesMut::new();
-            let mut len = end - start;
-            let mut f = match result {
-                Ok(f) => f,
-                Err(f) => return Either::Left(stream::once(future::err(f))),
-            };
+//     let mut buffer = Vec::with_capacity((end - start) as usize);
+//     seek.read_exact(&mut buffer).await?;
 
-            Either::Right(stream::poll_fn(move |cx| {
-                if len == 0 {
-                    return Poll::Ready(None);
-                }
-                reserve_at_least(&mut buf, buf_size);
 
-                let n = match ready!(poll_read_buf(Pin::new(&mut f), cx, &mut buf)) {
-                    Ok(n) => n as u64,
-                    Err(err) => {
-                        return Poll::Ready(Some(Err(err)));
-                    }
-                };
 
-                if n == 0 {
-                    return Poll::Ready(None);
-                }
+//     // seek.into_stream()
+//     //     .map(move |result| {
+//     //         let mut buf = BytesMut::new();
+//     //         let mut len = end - start;
+//     //         let mut f = match result {
+//     //             Ok(f) => f,
+//     //             Err(f) => return Either::Left(stream::once(future::err(f))),
+//     //         };
 
-                let mut chunk = buf.split().freeze();
-                if n > len {
-                    chunk = chunk.split_to(len as usize);
-                    len = 0;
-                } else {
-                    len -= n;
-                }
+//     //         Either::Right(stream::poll_fn(move |cx| {
+//     //             if len == 0 {
+//     //                 return Poll::Ready(None);
+//     //             }
+//     //             reserve_at_least(&mut buf, buf_size);
 
-                Poll::Ready(Some(Ok(chunk)))
-            }))
-        })
-        .flatten()
-}
+//     //             let n = match ready!(poll_read_buf(Pin::new(&mut f), cx, &mut buf)) {
+//     //                 Ok(n) => n as u64,
+//     //                 Err(err) => {
+//     //                     return Poll::Ready(Some(Err(err)));
+//     //                 }
+//     //             };
+
+//     //             if n == 0 {
+//     //                 return Poll::Ready(None);
+//     //             }
+
+//     //             let mut chunk = buf.split().freeze();
+//     //             if n > len {
+//     //                 chunk = chunk.split_to(len as usize);
+//     //                 len = 0;
+//     //             } else {
+//     //                 len -= n;
+//     //             }
+
+//     //             Poll::Ready(Some(Ok(chunk)))
+//     //         }))
+//     //     })
+//     //     .flatten()
+// }
 
 fn reserve_at_least(buf: &mut BytesMut, cap: usize) {
     if buf.capacity() - buf.len() < cap {
@@ -306,28 +331,41 @@ async fn download_handler(filename: String, bucket: GridFsBucket, conditionals: 
             let file_collections: Result<Vec<FilesCollectionDocument>,_> = cursor.try_collect().await;
             match file_collections {
                 Ok(metas) => {
-                    let _chunk_size = metas[0].chunk_size_bytes;
+                    let chunk_size = metas[0].chunk_size_bytes;
                     let mut length = metas[0].length;
                     let modified = Some(LastModified::from(metas[0].upload_date.to_system_time()));
 
                     let resp = match conditionals.check(modified) {
                         Cond::NoBody(resp) => resp,
                         Cond::WithBody(range) => {
-                            match bytes_range(range, length) {
+                            match bytes_range(range, length, chunk_size as u64) {
                                 Ok((start, end)) => {
                                     let sub_len = end - start;
+                                    // println!("{}",sub_len);
                                     let buf_size = 8_192;
 
-                                    let download_stream = bucket
+                                    let mut download_stream = bucket
                                         .open_download_stream_by_name(filename.clone(), None)
                                         .await
                                         .expect("should be able to download data to bucket");
 
-                                    let stream = file_stream(download_stream.compat(), buf_size, (start, end));
+                                    // let stream = file_stream(download_stream.compat(), buf_size, (start, end));
+                                    let mut file = download_stream.compat();
 
-                                    let body = Body::wrap_stream(stream);
+                                    if start != 0 {
+                                        // const start: usize = start;
+                                        let mut buffer = vec![0; start as usize];
+                                        file.read_exact(&mut buffer).await.expect("should be able to read");
+                                        //assert()
+                                        //file.seek(SeekFrom::Start(start)).await?;
+                                    }
+                                
+                                    let mut buffer = vec![0; (end - start) as usize];
+                                    file.read_exact(&mut buffer).await.expect("should be able to read");
 
-                                    let mut resp = Response::new(body);
+                                    //let body = Body(buffer);
+
+                                    let mut resp = Response::new(buffer.into());
 
                                     if sub_len != length {
                                         *resp.status_mut() = StatusCode::PARTIAL_CONTENT;
@@ -368,7 +406,7 @@ async fn download_handler(filename: String, bucket: GridFsBucket, conditionals: 
             }
         },
         Err(_) => {
-            println!("no file");
+            // println!("no file");
             return Err(reject::not_found())
         }
     }
