@@ -25,9 +25,10 @@ async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl
                 Ok(metas) => {
                     let _chunk_size = metas[0].chunk_size_bytes;
                     let length = metas[0].length;
+                    let id = metas[0].id.clone();
                     println!("opening file");
                     let download_stream = bucket
-                        .open_download_stream_by_name(filename.clone(), None)
+                        .open_download_stream(id)
                         .await
                         .expect("should be able to download data to bucket");
                     println!("opened file");
