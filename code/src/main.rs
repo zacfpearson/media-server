@@ -39,7 +39,6 @@ async fn download_handler(filename: String, bucket: GridFsBucket) -> Result<impl
 
                     let mime = mime_guess::from_path(filename.clone()).first_or_octet_stream();
                     resp.headers_mut().typed_insert(ContentType::from(mime));
-                    resp.headers_mut().typed_insert(AcceptRanges::bytes());
                     
                     Ok(resp)
                 },
